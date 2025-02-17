@@ -1,15 +1,23 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 4.0"
-    }
+provider "aws" {
+  region = "us-east-1"
+}
+
+# 🔹 Lookup the Default VPC
+data "aws_vpc" "default" {
+  default = true
+}
+
+# 🔹 Lookup Default Subnets
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
 }
 
-# Configure the AWS Provider
-provider "aws" {
-  region = "us-east-1"
+# 🔹 Lookup Existing IAM Role
+data "aws_iam_role" "ecs_execution_role" {
+  name = "ecs_execution_role"
 }
 
 # 🔹 Create an ECS Cluster
@@ -17,60 +25,9 @@ resource "aws_ecs_cluster" "main" {
   name = "nginx-cluster"
 }
 
-# 🔹 Create a VPC
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
-
-  tags = {
-    Name = "nginx-vpc"
-  }
-}
-
-# 🔹 Create Subnets
-resource "aws_subnet" "subnet1" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  availability_zone       = "us-east-1a"
-  map_public_ip_on_launch = true
-}
-
-resource "aws_subnet" "subnet2" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.2.0/24"
-  availability_zone       = "us-east-1b"
-  map_public_ip_on_launch = true
-}
-
-# 🔹 Create an Internet Gateway
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.main.id
-}
-
-# 🔹 Create a Route Table
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-}
-
-resource "aws_route" "internet_access" {
-  route_table_id         = aws_route_table.public.id
-  destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.gw.id
-}
-
-# 🔹 Associate Route Table with Subnets
-resource "aws_route_table_association" "subnet1" {
-  subnet_id      = aws_subnet.subnet1.id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_route_table_association" "subnet2" {
-  subnet_id      = aws_subnet.subnet2.id
-  route_table_id = aws_route_table.public.id
-}
-
 # 🔹 Security Group for ALB
 resource "aws_security_group" "alb_sg" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = data.aws_vpc.default.id
 
   ingress {
     from_port   = 80
@@ -89,12 +46,12 @@ resource "aws_security_group" "alb_sg" {
 
 # 🔹 Security Group for ECS Tasks
 resource "aws_security_group" "ecs_sg" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = data.aws_vpc.default.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
     security_groups = [aws_security_group.alb_sg.id] # Allow ALB traffic
   }
 
@@ -112,7 +69,7 @@ resource "aws_lb" "alb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets           = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
+  subnets            = data.aws_subnets.default.ids
 }
 
 # 🔹 Create a Target Group
@@ -120,7 +77,7 @@ resource "aws_lb_target_group" "tg" {
   name        = "nginx-target-group"
   port        = 80
   protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = data.aws_vpc.default.id
   target_type = "ip"
 }
 
@@ -136,38 +93,12 @@ resource "aws_lb_listener" "listener" {
   }
 }
 
-# 🔹 IAM Role for ECS Execution
-resource "aws_iam_role" "ecs_execution_role" {
-  name = "ecs_execution_role"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "ecs-tasks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-}
-
-# 🔹 Attach AWS Managed Policy for ECS Execution
-resource "aws_iam_role_policy_attachment" "ecs_execution_attachment" {
-  role       = aws_iam_role.ecs_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
 # 🔹 Define ECS Task Definition
 resource "aws_ecs_task_definition" "nginx" {
   family                   = "nginx-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  execution_role_arn       = data.aws_iam_role.ecs_execution_role.arn
   cpu                      = "256"
   memory                   = "512"
 
@@ -197,7 +128,7 @@ resource "aws_ecs_service" "nginx_service" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets          = [aws_subnet.subnet1.id, aws_subnet.subnet2.id]
+    subnets          = data.aws_subnets.default.ids
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
