@@ -10,7 +10,7 @@ terraform {
 # Configure the AWS Provider
 provider "aws" {
   region = "us-east-1"
-
+}
 
 # 🔹 Lookup the Default VPC
 data "aws_vpc" "default" {
@@ -25,14 +25,19 @@ data "aws_subnets" "default" {
   }
 }
 
+data "aws_iam_role" "ecs_execution_role" {
+  name = "ecsTaskExecutionRole"
+}
+
 # 🔹 Create an ECS Cluster
 resource "aws_ecs_cluster" "main" {
-  name = "nginx-cluster"
+  name = "user0-cluster"
 }
 
 # 🔹 Security Group for ALB
 resource "aws_security_group" "alb_sg" {
   vpc_id = data.aws_vpc.default.id
+  name = "user0_ALB"
 
   ingress {
     from_port   = 80
@@ -52,6 +57,7 @@ resource "aws_security_group" "alb_sg" {
 # 🔹 Security Group for ECS Tasks
 resource "aws_security_group" "ecs_sg" {
   vpc_id = data.aws_vpc.default.id
+  name = "user0_ECS"
 
   ingress {
     from_port   = 80
@@ -70,7 +76,7 @@ resource "aws_security_group" "ecs_sg" {
 
 # 🔹 Create an Application Load Balancer
 resource "aws_lb" "alb" {
-  name               = "nginx-alb"
+  name               = "user0-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
@@ -79,7 +85,7 @@ resource "aws_lb" "alb" {
 
 # 🔹 Create a Target Group
 resource "aws_lb_target_group" "tg" {
-  name        = "nginx-target-group"
+  name        = "user0-target-group"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = data.aws_vpc.default.id
@@ -98,44 +104,20 @@ resource "aws_lb_listener" "listener" {
   }
 }
 
-# 🔹 IAM Role for ECS Execution
-resource "aws_iam_role" "ecs_execution_role" {
-  name = "ecs_execution_role"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "ecs-tasks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-}
-
-# 🔹 Attach AWS Managed Policy for ECS Execution
-resource "aws_iam_role_policy_attachment" "ecs_execution_attachment" {
-  role       = aws_iam_role.ecs_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
 
 # 🔹 Define ECS Task Definition
 resource "aws_ecs_task_definition" "nginx" {
-  family                   = "nginx-task"
+  family                   = "user0-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
-  execution_role_arn       = aws_iam_role.ecs_execution_role.arn
+  execution_role_arn       = data.aws_iam_role.ecs_execution_role.arn
+ # execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   cpu                      = "256"
   memory                   = "512"
 
   container_definitions = jsonencode([
     {
-      name  = "nginx-container"
+      name  = "user0-container"
       image = "nginx:latest"
       cpu   = 256
       memory = 512
@@ -153,7 +135,7 @@ resource "aws_ecs_task_definition" "nginx" {
 
 # 🔹 Create ECS Service
 resource "aws_ecs_service" "nginx_service" {
-  name            = "nginx-service"
+  name            = "user0-service"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.nginx.arn
   launch_type     = "FARGATE"
@@ -168,7 +150,7 @@ resource "aws_ecs_service" "nginx_service" {
 
   load_balancer {
     target_group_arn = aws_lb_target_group.tg.arn
-    container_name   = "nginx-container"
+    container_name   = "user0-container"
     container_port   = 80
   }
 
